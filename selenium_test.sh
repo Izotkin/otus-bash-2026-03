@@ -2,7 +2,7 @@
 
 if [[ $# -ne 3 ]]; then
     echo "Необходимо указать URL, браузер и версию"
-    echo "Пример: $0 http://localhost:8080 chrome 124.0"
+    echo "Пример: $0 https://www.yandex.ru chrome 151.0"
     exit 1
 fi
 
@@ -35,63 +35,133 @@ cat > pom.xml << 'EOF'
     <groupId>com.test</groupId>
     <artifactId>selenium-test</artifactId>
     <version>1.0</version>
+
+    <properties>
+        <maven.compiler.source>11</maven.compiler.source>
+        <maven.compiler.target>11</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
     <dependencies>
         <dependency>
             <groupId>org.seleniumhq.selenium</groupId>
             <artifactId>selenium-java</artifactId>
-            <version>3.141.59</version>
+            <version>4.27.0</version>
         </dependency>
         <dependency>
             <groupId>org.testng</groupId>
             <artifactId>testng</artifactId>
-            <version>6.14.3</version>
+            <version>7.8.0</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.2.2</version>
+            </plugin>
+        </plugins>
+    </build>
 </project>
 EOF
 
 mkdir -p src/test/java
-cat > src/test/java/SeleniumTest.java << EOF
+
+cat > src/test/java/SeleniumTest.java << 'EOF'
 import org.openqa.selenium.WebDriver;
-import org.openqa.selenium.remote.DesiredCapabilities;
+import org.openqa.selenium.chrome.ChromeOptions;
+import org.openqa.selenium.firefox.FirefoxOptions;
+import org.openqa.selenium.edge.EdgeOptions;
 import org.openqa.selenium.remote.RemoteWebDriver;
 import org.testng.annotations.Test;
 import java.net.URL;
+import java.time.Duration;
 
 public class SeleniumTest {
     @Test
-public void testOpenUrl() throws Exception {
-        DesiredCapabilities caps = new DesiredCapabilities();
-        caps.setBrowserName("$browser");
-        caps.setVersion("$version");
+    public void testOpenUrl() throws Exception {
+        URL seleniumUrl = new URL("http://localhost:4444/wd/hub");
+        WebDriver driver;
 
-        WebDriver driver = new RemoteWebDriver(
-            new URL("http://localhost:4444/wd/hub"), caps
-        );
+        String browser = System.getProperty("browser", "chrome");
+        String version = System.getProperty("version", "151.0");
+        String url = System.getProperty("url", "https://www.yandex.ru");
 
-        driver.get("$url");
-        System.out.println("Заголовок: " + driver.getTitle());
-        driver.quit();
+        System.out.println("Запуск теста");
+        System.out.println("  Браузер: " + browser + " " + version);
+        System.out.println("  URL: " + url);
+
+        switch (browser.toLowerCase()) {
+            case "chrome":
+                ChromeOptions chromeOptions = new ChromeOptions();
+                chromeOptions.setBrowserVersion(version);
+                chromeOptions.setImplicitWaitTimeout(Duration.ofSeconds(10));
+                driver = new RemoteWebDriver(seleniumUrl, chromeOptions);
+                break;
+            case "firefox":
+                FirefoxOptions firefoxOptions = new FirefoxOptions();
+                firefoxOptions.setBrowserVersion(version);
+                firefoxOptions.setImplicitWaitTimeout(Duration.ofSeconds(10));
+                driver = new RemoteWebDriver(seleniumUrl, firefoxOptions);
+                break;
+            case "edge":
+                EdgeOptions edgeOptions = new EdgeOptions();
+                edgeOptions.setBrowserVersion(version);
+                edgeOptions.setImplicitWaitTimeout(Duration.ofSeconds(10));
+                driver = new RemoteWebDriver(seleniumUrl, edgeOptions);
+                break;
+            default:
+                throw new IllegalArgumentException("Неподдерживаемый браузер: " + browser);
+        }
+
+        try {
+            driver.get(url);
+            System.out.println("Заголовок: " + driver.getTitle());
+            System.out.println("Текущий URL: " + driver.getCurrentUrl());
+            System.out.println("Тест пройден успешно!");
+        } finally {
+            driver.quit();
+        }
     }
 }
 EOF
 
-mvn clean test
+echo "Запуск тестов для браузера: $browser $version"
+echo "Тестируемый URL: $url"
+echo ""
 
-if [[ $? -eq 0 ]]; then
-    echo "Тесты выполнены успешно"
-    if [[ -d "target/surefire-reports" ]]; then
-        echo "Результаты тестов:"
-        find target/surefire-reports -name "*.xml" | while read r; do
-            echo "  $r"
-            grep -E "tests=|failures=" "$r" | head -1
-        done
-    fi
+mvn clean test -Dbrowser="$browser" -Dversion="$version" -Durl="$url"
+
+MAVEN_EXIT=$?
+
+if [[ -d "target/surefire-reports" ]]; then
+
+    for report in target/surefire-reports/*.txt; do
+        if [[ -f "$report" ]]; then
+            echo "Отчет: $report"
+            cat "$report"
+            echo ""
+        fi
+    done
+
+    for report in target/surefire-reports/*.xml; do
+        if [[ -f "$report" ]]; then
+            echo "Отчет: $report"
+            grep -E "tests=|failures=|errors=" "$report" | head -1
+            echo ""
+        fi
+    done
+fi
+
+if [[ $MAVEN_EXIT -eq 0 ]]; then
+    echo "Все тесты выполнены успешно!"
 else
-    echo "Ошибка при выполнении тестов"
-    exit 1
+    echo "Тесты завершились с ошибкой (код: $MAVEN_EXIT)"
 fi
 
 cd /tmp
 rm -rf "$tmp_dir"
+
+exit $MAVEN_EXIT
